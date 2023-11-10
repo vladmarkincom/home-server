@@ -1,0 +1,203 @@
+version: "3.8"
+
+services:
+  zerotrust:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: 
+      - tunnel 
+      - --no-autoupdate
+      - run 
+      - --token 
+      - ${CLOUDFLARE_ZERO_TRUST_TUNNEL_TOKEN}
+    labels:
+      - traefik.enable=false
+    networks:
+      home-server:
+        ipv4_address: 172.234.0.3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+  proxy:
+    image: traefik:saintmarcelin
+    command: 
+      - --log.level=INFO 
+      - --api.insecure=true
+      - --api.dashboard=true
+      - --providers.docker.network=home-server
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls=true
+      - --certificatesresolvers.le.acme.email=${ADMIN_EMAIL}
+      - --certificatesresolvers.le.acme.storage=acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+    restart: unless-stopped
+    ports:
+      - 80:80
+      - 443:443
+      - 8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml
+      - ./traefik/acme.json:/acme.json
+    networks:
+      home-server:
+        ipv4_address: 172.234.0.2
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: home-server
+      
+      traefik.http.routers.proxy-local.rule: 'Host(`172.234.0.2`) && Path(`/proxy/`) || Host(`${IP_NETW}`) && Path(`/proxy/`) || Host(`proxy.localhost`)'
+      traefik.http.routers.proxy-local.entrypoints: 'web, websecure'
+      traefik.http.routers.proxy-local.service: 'api@internal'
+      traefik.http.services.proxy-local.loadbalancer.server.port: 8080
+      
+      traefik.http.routers.proxy.rule: 'Host(`proxy.${DOMAIN}`)'
+      traefik.http.routers.proxy.entrypoints: 'web, websecure'
+      traefik.http.routers.proxy.tls.certresolver: 'le'
+      traefik.http.routers.proxy.service: 'api@internal'
+      traefik.http.services.proxy.loadbalancer.server.port: 8080
+
+      traefik.http.routers.proxy.middlewares: 'traefik-auth'
+      traefik.http.middlewares.traefik-auth.basicauth.users: 'test:$$2y$$10$$NXcXrZGvH.7Yja.G4cozpeEY52a5.aU3rLi6XxKXHzOUgtDrKp80S'
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '10m'
+        max-file: '10'
+
+  # whoami:
+  #   image: traefik/whoami
+  #   networks:
+  #     - home-server
+  #   labels:
+  #     traefik.enable: 'true'
+  #     traefik.docker.network: home-server
+  #     traefik.http.routers.whoami.rule: 'Host(`172.234.0.4`) || Host(`${IP_NETW}`) || Host(`whoami.${DOMAIN}`) || Host(`whoami.localhost`)'
+  #     traefik.http.services.whoami.loadbalancer.server.port: 80
+
+
+  dns:
+    image: pihole/pihole:latest
+    restart: unless-stopped
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+    networks:
+      - home-server
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: home-server
+      
+      traefik.http.routers.dns-local.rule: 'Host(`${IP_NETW}`) && Path(`/dns/`)'
+      traefik.http.services.dns-local.loadbalancer.server.port: 80
+
+      traefik.http.routers.dns.rule: 'Host(`dns.${DOMAIN}`)'
+      traefik.http.services.dns.loadbalancer.server.port: 80
+      traefik.http.routers.dns.middlewares: dns-auth
+      traefik.http.middlewares.dns-auth.basicauth.users: ${DNS_BUSER}:${PROXY_PASS}
+    environment:
+      TZ: '${TZ}'
+      WEBPASSWORD: '${DNS_ADMIN_PASSWORD}'
+    volumes:
+      - /var/home-server/pihole/etc/pihole:/etc/pihole
+      - /var/home-server/pihole/etc/dnsmasq.d:/etc/dnsmasq.d
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+  vscode:
+    image: lscr.io/linuxserver/code-server:latest # should be updated to my own image with nvm, yarn, python, and others required binaries
+    restart: unless-stopped
+    networks:
+      - home-server
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: '${TZ}'
+      DEFAULT_WORKSPACE: '/var/projects'
+    volumes:
+      - /var/home-server/vscode:/config
+      - /var/projects:/var/projects
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+  portainer:
+    restart: unless-stopped
+    image: portainer:portainer-ce:latest
+    networks:
+      - home-server
+    volumes:
+      - /var/home-server/portainer/data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+  # semaphore:
+  #   restart: unless-stopped
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "10"
+
+  # mongodb:
+  #   image: mongodb
+  #   restart: unless-stopped
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "10"
+
+  # postgresql:
+  #   restart: unless-stopped
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "10"
+
+  terminal:
+    tty: true
+    stdin_open: true
+    privileged: true
+    network_mode: host
+    pid: host
+    ipc: host
+    volumes:
+        - '/:/host'
+    labels:
+      traefik.enable: 'false'
+    image: busybox
+    command: 'chroot /host'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+networks:
+  home-server:
+    external: true
+    name: home-server
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.234.0.0/24
+          gateway: 172.234.0.1
