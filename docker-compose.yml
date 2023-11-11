@@ -125,10 +125,10 @@ services:
       traefik.docker.network: home-server
       
       traefik.http.routers.vscode-local.rule: 'Host(`${IP_NETW}`) && Path(`/code/`)'
-      traefik.http.services.vscode-local.loadbalancer.server.port: 80
+      traefik.http.services.vscode-local.loadbalancer.server.port: 8443
 
       traefik.http.routers.vscode.rule: 'Host(`code.${DOMAIN}`)'
-      traefik.http.services.vscode.loadbalancer.server.port: 80
+      traefik.http.services.vscode.loadbalancer.server.port: 8443
       traefik.http.routers.vscode.middlewares: vscode-auth
       traefik.http.middlewares.vscode-auth.basicauth.users: ${VSC_USER}:${VSC_PASS}
     environment:
