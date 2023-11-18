@@ -1,6 +1,8 @@
 version: '3.8'
 
 networks:
+  db-network:
+    external: true
   home-server:
     external: true
     name: home-server
@@ -13,6 +15,9 @@ networks:
 volumes:
   semaphore:
   postgres:
+  vscode:
+  portainer:
+  pihole:
 
 services:
   zerotrust:
@@ -25,7 +30,9 @@ services:
       - --token 
       - ${CF_ZT_TUNNEL_TOKEN}
     labels:
-      - traefik.enable=false
+      traefik.enable: 'false'
+    depends_on:
+      - proxy
     networks:
       home-server:
         ipv4_address: 172.234.0.3
@@ -42,8 +49,9 @@ services:
     image: traefik:saintmarcelin
     command: 
       - --log.level=INFO 
-      - --api.insecure=true
-      - --api.dashboard=true
+      - --api.insecure=false
+      - --api.dashboard=true 
+      # - --serversTransport.insecureSkipVerify=true
       - --providers.docker.network=home-server
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
@@ -59,29 +67,27 @@ services:
     ports:
       - 80:80
       - 443:443
+      - 8080:8080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/acme.json:/acme.json
+      - ./acme.json:/acme.json
     networks:
       home-server:
         ipv4_address: 172.234.0.2
     labels:
       traefik.enable: 'true'
       traefik.docker.network: home-server
-      
-      traefik.http.routers.proxy-local.rule: 'Host(`172.234.0.2`) && Path(`/proxy/`) || Host(`${IP_NETW}`) && Path(`/proxy/`) || Host(`proxy.localhost`)'
-      traefik.http.routers.proxy-local.entrypoints: 'web, websecure'
-      traefik.http.routers.proxy-local.service: 'api@internal'
-      traefik.http.services.proxy-local.loadbalancer.server.port: 8080
-      
       traefik.http.routers.proxy.rule: 'Host(`proxy.${DOMAIN}`)'
       traefik.http.routers.proxy.entrypoints: 'web, websecure'
       traefik.http.routers.proxy.tls.certresolver: 'le'
       traefik.http.routers.proxy.service: 'api@internal'
       traefik.http.services.proxy.loadbalancer.server.port: 8080
-
-      traefik.http.routers.proxy.middlewares: 'traefik-auth'
-      traefik.http.middlewares.traefik-auth.basicauth.users: 'test:$$2y$$10$$NXcXrZGvH.7Yja.G4cozpeEY52a5.aU3rLi6XxKXHzOUgtDrKp80S'
+      traefik.http.routers.proxy.middlewares: 'basic-auth'
+      traefik.http.middlewares.basic-auth.basicauth.users: '${BAUTH_USER}:${BAUTH_PASS}'
+      traefik.http.middlewares.basic-auth.basicauth.realm: 'customRealm'
+      traefik.http.middlewares.basic-auth.basicauth.headerField: 'X-WebAuth-User'
+      traefik.http.middlewares.basic-auth.basicauth.removeheader: 'true'
+      
     logging:
       driver: 'json-file'
       options:
@@ -95,27 +101,21 @@ services:
       - '53:53/tcp'
       - '53:53/udp'
     networks:
-      - home-server
+      home-server:
+        ipv4_address: 172.234.0.4
+    depends_on:
+      - proxy
     labels:
       traefik.enable: 'true'
       traefik.docker.network: home-server
-      
-      traefik.http.routers.dns-local.rule: 'Host(`${IP_NETW}`) && Path(`/dns/`)'
-      traefik.http.services.dns-local.loadbalancer.server.port: 80
-
       traefik.http.routers.dns.rule: 'Host(`dns.${DOMAIN}`)'
+      traefik.http.routers.dns.entrypoints: 'web, websecure'
+      traefik.http.routers.dns.tls.certresolver: 'le'
       traefik.http.services.dns.loadbalancer.server.port: 80
-
-      traefik.http.routers.proxy.middlewares: 'traefik-auth'
-
-      # traefik.http.routers.dns.middlewares: dns-auth
-      # traefik.http.middlewares.dns-auth.basicauth.users: ${DNS_USER}:${PROXY_PASS}
-    environment:
-      TZ: '${TZ}'
-      WEBPASSWORD: '${DNS_ADMIN_PASSWORD}'
+      traefik.http.routers.dns.middlewares: 'basic-auth'
     volumes:
-      - /var/home-server/pihole/etc/pihole:/etc/pihole
-      - /var/home-server/pihole/etc/dnsmasq.d:/etc/dnsmasq.d
+      - pihole:/etc/pihole
+      - ./pihole-etc-dnsmasq.d:/etc/dnsmasq.d
     logging:
       driver: 'json-file'
       options:
@@ -125,34 +125,28 @@ services:
   vscode:
     image: vladmarkincom/code-server:latest
     restart: unless-stopped
-    # ports:
-    #   - 8443:8443
     networks:
-      - home-server
+      home-server:
+        ipv4_address: 172.234.0.5
+    depends_on:
+      - proxy
     labels:
       traefik.enable: 'true'
       traefik.docker.network: home-server
-      
-      traefik.http.routers.vscode-local.rule: 'Host(`${IP_NETW}`) && Path(`/code/`)'
-      traefik.http.services.vscode-local.loadbalancer.server.port: 8443
-
       traefik.http.routers.vscode.rule: 'Host(`code.${DOMAIN}`)'
+      traefik.http.routers.vscode.entrypoints: 'web, websecure'
+      traefik.http.routers.vscode.tls.certresolver: 'le'
       traefik.http.services.vscode.loadbalancer.server.port: 8443
-
-      traefik.http.routers.proxy.middlewares: 'traefik-auth'
-      
-      # traefik.http.routers.vscode.middlewares: vscode-auth
-      # traefik.http.middlewares.vscode-auth.basicauth.users: ${VSC_USER}:${VSC_PASS}
+      traefik.http.routers.vscode.middlewares: 'basic-auth'
     environment:
-      PUID: 1000
-      PGID: 1000
-      TZ: '${TZ}'
-      DEFAULT_WORKSPACE: '/var/projects'
+      PGID: ${PGID}
     volumes:
       # required to run docker on host
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/home-server/vscode:/config
-      - /var/projects:/var/projects
+      - vscode:/config
+      - $DEFAULT_WORKSPACE:$DEFAULT_WORKSPACE
+    env_file:
+      - .env
     logging:
       driver: 'json-file'
       options:
@@ -161,26 +155,27 @@ services:
 
   portainer:
     restart: unless-stopped
-    image: portainer:portainer-ce:latest
+    image: portainer/portainer-ce:latest
     networks:
-      - home-server
+      home-server:
+        ipv4_address: 172.234.0.6
+    depends_on:
+      - proxy
     labels:
       traefik.enable: 'true'
       traefik.docker.network: home-server
-      
-      traefik.http.routers.vscode-local.rule: 'Host(`${IP_NETW}`) && Path(`/portainer/`)'
-      traefik.http.services.vscode-local.loadbalancer.server.port: 8443
-
-      traefik.http.routers.vscode.rule: 'Host(`portainer.${DOMAIN}`)'
-      traefik.http.services.vscode.loadbalancer.server.port: 8443
-
-      traefik.http.routers.proxy.middlewares: 'traefik-auth'
-      
-      # traefik.http.routers.vscode.middlewares: portainer-auth
-      # traefik.http.middlewares.portainer-auth.basicauth.users: ${VSC_USER}:${VSC_PASS}
+      traefik.http.routers.portainer.rule: 'Host(`portainer.${DOMAIN}`)'
+      traefik.http.routers.portainer.entrypoints: 'websecure'
+      traefik.http.routers.portainer.service: 'portainer'
+      traefik.http.services.portainer.loadbalancer.server.port: 9000
+      # basic auth broke portainer auth
+      # traefik.http.routers.portainer.middlewares: 'basic-auth' 
+    environment:
+      VIRTUAL_HOST: portainer.${DOMAIN}
+      VIRTUAL_PORT: 9000
     volumes:
-      - /var/home-server/portainer/data:/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer:/data
     logging:
       driver: 'json-file'
       options:
@@ -210,29 +205,23 @@ services:
     image: semaphoreui/semaphore:latest
     restart: unless-stopped
     networks:
-      - home-server
+      home-server:
+        ipv4_address: 172.234.0.7
     depends_on:
+      - proxy
       - postgres
     labels:
       traefik.enable: 'true'
       traefik.docker.network: home-server
-      
-      traefik.http.routers.vscode-local.rule: 'Host(`${IP_NETW}`) && Path(`/semaphore/`)'
-      traefik.http.services.vscode-local.loadbalancer.server.port: 3000
-
-      traefik.http.routers.vscode.rule: 'Host(`semaphore.${DOMAIN}`)'
-      traefik.http.services.vscode.loadbalancer.server.port: 3000
-
-      traefik.http.routers.proxy.middlewares: 'traefik-auth'
-    environment:
-      SEMAPHORE_DB_DIALECT: postgres
-      SEMAPHORE_DB: ${POSTGRES_DB:-semaphore}?sslmode=disable
-      SEMAPHORE_ADMIN_PASSWORD: changeme
-      SEMAPHORE_ADMIN_NAME: admin
-      SEMAPHORE_ADMIN_EMAIL: admin@localhost
-      SEMAPHORE_ADMIN: admin
+      traefik.http.routers.semaphore.rule: 'Host(`semaphore.${DOMAIN}`)'
+      traefik.http.routers.semaphore.entrypoints: 'web, websecure'
+      traefik.http.routers.semaphore.tls.certresolver: 'le'
+      traefik.http.services.semaphore.loadbalancer.server.port: 3000
+      traefik.http.routers.semaphore.middlewares: 'basic-auth'
     volumes:
         - 'semaphore:/data'
+    env_file:
+      - .env
     logging:
       driver: 'json-file'
       options:
@@ -241,7 +230,15 @@ services:
 
   # mongodb:
   #   image: mongodb
+  #   hostname: mongodb
   #   restart: unless-stopped
+  #   networks:
+  #    home-server:
+  #      ipv4_address: 172.234.0.24
+  #   ports:
+  #     - 27017:27017
+  #   labels:
+  #     traefik.enable: 'false'
   #   logging:
   #     driver: 'json-file'
   #     options:
@@ -252,10 +249,16 @@ services:
     restart: unless-stopped
     hostname: postgres
     image: postgres
-    ports:
-      - 5432:5432
+    networks:
+      home-server:
+        ipv4_address: 172.234.0.25
+    labels:
+      traefik.enable: 'false'
     volumes:
+      - ./postgress_multiple_db.sh:/docker-entrypoint-initdb.d/99-postgress_multiple_db.sh
       - postgres:/var/lib/postgresql/data
+    env_file:
+      - .env
     logging:
       driver: 'json-file'
       options:
@@ -263,4 +266,4 @@ services:
         max-file: '10'
 
   # # HERE MUST BE THE BACKUP CONTAINER
-  # # FOR /var/home-server folder
+  # # FOR volumes AND DATABASES
